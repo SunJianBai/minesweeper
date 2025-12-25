@@ -5,3 +5,6 @@
 
 // 扫雷格子贴图
 #define IDB_MINE_COLOR 131
+
+// 应用程序图标
+#define IDI_APPICON    101

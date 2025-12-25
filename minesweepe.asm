@@ -72,6 +72,13 @@ total_cells DWORD 100        ; 总格子数 = board_width * board_height
 szClassName   BYTE "MineClass",0
 szCaptionMain BYTE "Minesweeper",0
 
+; 应用程序图标文件路径（运行时从磁盘加载）
+szAppIconPath BYTE "res\\favicon.ico",0
+
+; 命令行参数开关：如果命令行中包含 " console" 子串，则认为需要保留控制台
+console_enabled BYTE 0
+szConsoleSwitch BYTE " console",0
+
 szResetText   BYTE "Reset",0
 
 ; 菜单文本（使用英文避免编码问题）
@@ -1758,6 +1765,10 @@ WinMain PROC
     MOV @stWndClass.hCursor, EAX
     MOV EAX, hInstance
     MOV @stWndClass.hInstance, EAX
+    ; 从文件加载应用图标，设置大图标和小图标
+    INVOKE LoadImage, NULL, OFFSET szAppIconPath, IMAGE_ICON, 32, 32, LR_LOADFROMFILE
+    MOV @stWndClass.hIcon, EAX
+    MOV @stWndClass.hIconSm, EAX
     MOV @stWndClass.cbSize, SIZEOF WNDCLASSEX
     MOV @stWndClass.style, CS_HREDRAW OR CS_VREDRAW
     MOV @stWndClass.lpfnWndProc, OFFSET ProcWinMain
@@ -1797,8 +1808,59 @@ WinMain ENDP
 
 
 main PROC
-    ; 入口：启动窗口程序；控制台同时存在，用于 printf 调试
+    ; 入口：根据命令行决定是否保留控制台
+    ; 获取命令行字符串
+    INVOKE GetCommandLine
+    MOV ESI, EAX                ; ESI -> command line
+
+    MOV console_enabled, 0
+
+search_next_char:
+    MOV AL, [ESI]
+    CMP AL, 0
+    JE search_done              ; 到结尾未找到
+
+    ; 尝试在当前位置比较子串 " console"
+    MOV EDI, ESI                ; EDI = 当前起始位置
+    MOV EBX, OFFSET szConsoleSwitch
+
+match_loop:
+    MOV DL, [EBX]
+    CMP DL, 0
+    JE found_switch             ; 完整匹配 " console"
+
+    MOV AL, [EDI]
+    CMP AL, 0
+    JE no_match
+
+    CMP AL, DL
+    JNE no_match
+
+    INC EDI
+    INC EBX
+    JMP match_loop
+
+no_match:
+    INC ESI
+    JMP search_next_char
+
+found_switch:
+    MOV console_enabled, 1
+    JMP search_done
+
+search_done:
+    ; 如果未显式要求控制台，则释放控制台，这样双击运行时不会看到控制台窗口
+    CMP console_enabled, 0
+    JNE keep_console
+    INVOKE FreeConsole
+
+keep_console:
+    ; 控制台模式下仍然输出调试信息
+    CMP console_enabled, 0
+    JE skip_main_printf
     INVOKE printf, OFFSET MsgMainStart
+
+skip_main_printf:
     INVOKE WinMain
     INVOKE ExitProcess, NULL
     RET

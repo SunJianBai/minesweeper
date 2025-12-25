@@ -6,3 +6,5 @@ IDR_BOOM_MP3  RCDATA "res\\boom.mp3"
 
 // 扫雷格子位图（16 个竖排小格子）
 IDB_MINE_COLOR BITMAP "res\\MINE_COLOR.BMP"
+
+// 应用程序图标改为运行时从文件加载（避免老式 DIB 图标与 rc 冲突）

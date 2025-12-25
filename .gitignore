@@ -1,5 +1,16 @@
 *.exe
 *.obj
+*.res
+*.pdb
+*.ilk
+
+# VS / 调试输出目录
+Debug/
+Release/
+x64/
+*/Debug/
+*/Release/
+*/x64/
 
 .DS_Store
 .vscode/
