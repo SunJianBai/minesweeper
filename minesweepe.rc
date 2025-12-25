@@ -3,3 +3,6 @@
 // 将 mp3 文件作为 RCDATA 资源嵌入到 exe 中
 IDR_CLICK_MP3 RCDATA "res\\click.mp3"
 IDR_BOOM_MP3  RCDATA "res\\boom.mp3"
+
+// 扫雷格子位图（16 个竖排小格子）
+IDB_MINE_COLOR BITMAP "res\\MINE_COLOR.BMP"

@@ -56,6 +56,10 @@ hBrushFlag   DWORD ?         ; 旗子底色
 ; 被点中的雷用红色，其它雷用橙色
 hBrushMineOther DWORD ?      ; 其他雷格子刷子
 
+; 格子位图与内存 DC（用于从 MINE_COLOR.BMP 贴图绘制格子）
+hBmpMine     DWORD ?         ; MINE_COLOR.BMP 的位图句柄
+hMemMineDC   DWORD ?         ; 选择了 hBmpMine 的内存 DC
+
 ; ==== 布局与窗口尺寸（根据难度动态更新）====
 gWinWidth   DWORD WINDOW_WIDTH
 gWinHeight  DWORD WINDOW_HEIGHT
@@ -181,6 +185,9 @@ IDM_DIFF_EXPERT EQU 1003
 ; 资源 ID（嵌入的 mp3）
 IDR_CLICK_MP3   EQU 2001
 IDR_BOOM_MP3    EQU 2002
+
+; 资源 ID（格子位图，需与 resource.h 中保持一致）
+IDB_MINE_COLOR  EQU 131
 
 .code
 ;获取系统时间并用作种子
@@ -1106,10 +1113,11 @@ init_ui PROC
 
     ; 创建几种背景画刷
     ; 颜色为 BGR 格式
-    INVOKE CreateSolidBrush, 0C0C0C0h   ; 灰色，未翻开
+    INVOKE CreateSolidBrush, 0C0C0C0h   ; 深灰色，未翻开
     MOV hBrushClosed, EAX
 
-    INVOKE CreateSolidBrush, 0FFFFFFh   ; 白色，已翻开
+    ; 整体背景改为浅灰色，看起来更柔和
+    INVOKE CreateSolidBrush, 0E0E0E0h   ; 浅灰色，窗口背景
     MOV hBrushOpen, EAX
 
     INVOKE CreateSolidBrush, 000000FFh  ; 红色，地雷
@@ -1139,6 +1147,7 @@ DrawGameBoard PROC hWnd:DWORD, hDc:DWORD
     LOCAL @timeTextX:DWORD, @timeTextY:DWORD, @timeTextLen:DWORD
     LOCAL @timeSec:DWORD
     LOCAL bMine:BYTE, bOpen:BYTE, bFlag:BYTE, bAround:BYTE
+    LOCAL tileIndex:DWORD, srcY:DWORD
 
     PUSH ESI
     PUSH EDI
@@ -1240,6 +1249,122 @@ col_loop_draw:
     MOV AL, [EDI+3]    ; bAround
     MOV bAround, AL
 
+    ;======================================
+    ; 计算当前格子应使用的贴图下标 tileIndex
+    ; 参照原 Mine 工程中 STATE_* 的顺序：
+    ; 0: 未点击；1: 旗；3: 失败时其他雷；4: 失败时踩雷；
+    ; 5: 成功时所有雷；7..14: 数字 8..1；15: 空白(0)
+    ;======================================
+
+    XOR EAX, EAX
+    MOV tileIndex, EAX        ; 默认未点击格子 0
+
+    MOV AL, game_state
+    CMP AL, 2
+    JE dg_fail_state
+    CMP AL, 3
+    JE dg_win_state
+    JMP dg_play_state
+
+; ---- 游戏进行中 / 未开始 ----
+dg_play_state:
+    MOV AL, bOpen
+    CMP AL, 0
+    JNE dg_play_opened
+
+    ; 未翻开
+    MOV AL, bFlag
+    CMP AL, 1
+    JNE dg_tile_done
+    MOV tileIndex, 1          ; 插旗
+    JMP dg_tile_done
+
+dg_play_opened:
+    ; 已翻开的非雷格，按数字显示
+    MOV AL, bMine
+    CMP AL, 1
+    JE dg_tile_done           ; 正常流程中不会出现已翻开的雷
+
+    MOVZX EAX, bAround        ; 0..8
+    CMP EAX, 8
+    JA dg_tile_done
+    ; 数字贴图从 8,7,..,1,0(空) 对应索引 7..15
+    ; 映射：index = 15 - around
+    MOV ECX, 15
+    SUB ECX, EAX
+    MOV tileIndex, ECX
+    JMP dg_tile_done
+
+; ---- 游戏失败：显示所有雷，区分踩雷 / 其他雷 ----
+dg_fail_state:
+    MOV AL, bMine
+    CMP AL, 1
+    JNE dg_fail_not_mine
+
+    ; 计算 index = row * board_width + col，用于判断是否是踩中的雷
+    MOV EAX, @row
+    MOVZX ECX, board_width
+    IMUL EAX, ECX
+    ADD EAX, @col
+    MOV EDX, last_click_index
+    CMP EAX, EDX
+    JE dg_fail_clicked
+
+    MOV tileIndex, 3          ; 失败时其他雷
+    JMP dg_tile_done
+
+dg_fail_clicked:
+    MOV tileIndex, 4          ; 失败时踩中的雷
+    JMP dg_tile_done
+
+dg_fail_not_mine:
+    ; 非雷格子按照进行中时的显示规则
+    MOV AL, bOpen
+    CMP AL, 0
+    JNE dg_fail_opened
+    MOV AL, bFlag
+    CMP AL, 1
+    JNE dg_tile_done
+    MOV tileIndex, 1          ; 旗
+    JMP dg_tile_done
+
+dg_fail_opened:
+    MOVZX EAX, bAround
+    CMP EAX, 8
+    JA dg_tile_done
+    MOV ECX, 15
+    SUB ECX, EAX
+    MOV tileIndex, ECX
+    JMP dg_tile_done
+
+; ---- 游戏胜利：所有雷用成功贴图 5 显示 ----
+dg_win_state:
+    MOV AL, bMine
+    CMP AL, 1
+    JNE dg_win_not_mine
+    MOV tileIndex, 5          ; 成功时所有雷
+    JMP dg_tile_done
+
+dg_win_not_mine:
+    MOV AL, bOpen
+    CMP AL, 0
+    JNE dg_win_opened
+    MOV AL, bFlag
+    CMP AL, 1
+    JNE dg_tile_done
+    MOV tileIndex, 1          ; 旗
+    JMP dg_tile_done
+
+dg_win_opened:
+    MOVZX EAX, bAround
+    CMP EAX, 8
+    JA dg_tile_done
+    MOV ECX, 15
+    SUB ECX, EAX
+    MOV tileIndex, ECX
+
+dg_tile_done:
+
     ; 计算像素坐标
     MOV EAX, @col
     IMUL EAX, CELL_SIZE
@@ -1261,139 +1386,14 @@ col_loop_draw:
     ADD EAX, CELL_SIZE
     MOV @y2, EAX
 
-    ; 选择底色画刷
-    MOV AL, bOpen
-    CMP AL, 0          ; 未翻开
-    JNE opened_cell
+    ; 使用位图 MINE_COLOR.BMP 绘制当前格子
+    ; 源矩形：x=0, y=tileIndex*16, 宽高=16x16
+    MOV EAX, tileIndex
+    MOV ECX, 16
+    IMUL ECX                 ; EAX = tileIndex * 16
+    MOV srcY, EAX
 
-    MOV AL, bFlag
-    CMP AL, 1
-    JE flag_cell
-
-    ; 未翻开且未插旗
-    INVOKE SelectObject, hDc, hBrushClosed
-    JMP draw_rect
-
-flag_cell:
-    INVOKE SelectObject, hDc, hBrushFlag
-    JMP draw_rect
-
-opened_cell:
-    MOV AL, bMine
-    CMP AL, 1          ; 有雷
-    JE mine_cell
-
-    INVOKE SelectObject, hDc, hBrushOpen
-    JMP draw_rect
-
-mine_cell:
-    ; 根据是否是被点击的雷选择不同颜色
-    ; index = row * board_width + col
-    MOV EAX, @row
-    MOVZX ECX, board_width
-    IMUL EAX, ECX
-    ADD EAX, @col
-    MOV EDX, last_click_index
-    CMP EAX, EDX
-    JE clicked_mine
-
-    ; 其他雷用橙色
-    INVOKE SelectObject, hDc, hBrushMineOther
-    JMP draw_rect
-
-clicked_mine:
-    ; 被点击的雷用红色
-    INVOKE SelectObject, hDc, hBrushMine
-
-draw_rect:
-    INVOKE Rectangle, hDc, @x, @y, @x2, @y2
-
-    ; 绘制内容: 数字 / 雷 / 旗
-    MOV AL, bOpen
-    CMP AL, 1
-    JNE draw_flag_text
-
-    ; 已翻开
-    MOV AL, bMine
-    CMP AL, 1
-    JE draw_mine_text
-
-    ; 安全格子，显示周围雷数
-    MOV AL, bAround
-    CMP AL, 0
-    JE skip_text
-
-    MOV AL, bAround
-    ADD AL, '0'
-    MOV szOne[0], AL
-    MOV szOne[1], 0
-    ; SetTextColor(hDc, 0x00000000)
-    PUSH 00000000h
-    PUSH hDc
-    CALL SetTextColor
-    ; TextOut(hDc, x+14, y+10, szOne, 1)
-    MOV EAX, @x
-    ADD EAX, 14        ; EAX = x
-    MOV EDX, EAX       ; 保存 x
-    MOV EAX, @y
-    ADD EAX, 10        ; EAX = y
-    MOV ECX, EAX       ; 保存 y
-    LEA EAX, szOne     ; EAX = &szOne
-    PUSH 1             ; c = 1
-    PUSH EAX           ; lpString
-    PUSH ECX           ; y
-    PUSH EDX           ; x
-    PUSH hDc           ; hdc
-    CALL TextOut
-    JMP skip_text
-
-draw_mine_text:
-    MOV szOne[0], '*'
-    MOV szOne[1], 0
-    ; SetTextColor(hDc, 0x000000FF)
-    PUSH 000000FFh
-    PUSH hDc
-    CALL SetTextColor
-    ; TextOut(hDc, x+12, y+8, szOne, 1)
-    MOV EAX, @x
-    ADD EAX, 12        ; EAX = x
-    MOV EDX, EAX       ; 保存 x
-    MOV EAX, @y
-    ADD EAX, 8         ; EAX = y
-    MOV ECX, EAX       ; 保存 y
-    LEA EAX, szOne     ; EAX = &szOne
-    PUSH 1             ; c = 1
-    PUSH EAX           ; lpString
-    PUSH ECX           ; y
-    PUSH EDX           ; x
-    PUSH hDc           ; hdc
-    CALL TextOut
-    JMP skip_text
-
-draw_flag_text:
-    MOV AL, bFlag
-    CMP AL, 1
-    JNE skip_text
-    MOV szOne[0], 'F'
-    MOV szOne[1], 0
-    ; SetTextColor(hDc, 0x0000FF00)
-    PUSH 0000FF00h
-    PUSH hDc
-    CALL SetTextColor
-    ; TextOut(hDc, x+12, y+8, szOne, 1)
-    MOV EAX, @x
-    ADD EAX, 12        ; EAX = x
-    MOV EDX, EAX       ; 保存 x
-    MOV EAX, @y
-    ADD EAX, 8         ; EAX = y
-    MOV ECX, EAX       ; 保存 y
-    LEA EAX, szOne     ; EAX = &szOne
-    PUSH 1             ; c = 1
-    PUSH EAX           ; lpString
-    PUSH ECX           ; y
-    PUSH EDX           ; x
-    PUSH hDc           ; hdc
-    CALL TextOut
+    INVOKE StretchBlt, hDc, @x, @y, CELL_SIZE, CELL_SIZE, hMemMineDC, 0, srcY, 16, 16, SRCCOPY
 
 skip_text:
     INC @col
@@ -1457,10 +1457,21 @@ ProcWinMain PROC hWnd:DWORD, uMsg:DWORD, wParam:DWORD, lParam:DWORD
         INVOKE printf, OFFSET MsgMciOpenBoomErr, EAX
     mci_open_boom_ok:
 
+        ; 加载格子位图 MINE_COLOR.BMP 并创建内存 DC
+        INVOKE LoadBitmap, hInstance, IDB_MINE_COLOR
+        MOV hBmpMine, EAX
+        INVOKE CreateCompatibleDC, NULL
+        MOV hMemMineDC, EAX
+        ; 将位图选入内存 DC
+        INVOKE SelectObject, hMemMineDC, hBmpMine
+
     .ELSEIF EAX == WM_CLOSE
         ; 关闭点击 / 爆炸音效
         INVOKE mciSendStringA, ADDR szMciCloseClick, NULL, 0, NULL
         INVOKE mciSendStringA, ADDR szMciCloseBoom, NULL, 0, NULL
+        ; 释放格子位图与内存 DC
+        INVOKE DeleteDC, hMemMineDC
+        INVOKE DeleteObject, hBmpMine
         ; 删除临时 mp3 文件
         INVOKE DeleteFile, ADDR szClickTmpPath
         INVOKE DeleteFile, ADDR szBoomTmpPath
@@ -1617,6 +1628,9 @@ ProcWinMain PROC hWnd:DWORD, uMsg:DWORD, wParam:DWORD, lParam:DWORD
         MOV @beforeState, EAX
 
     click_time_done:
+
+        ; 每次新的鼠标点击开始时，先假定本次不是踩雷
+        MOV last_click_is_mine, 0
 
         ; 根据按键类型调用逻辑函数（先更新逻辑，再根据结果决定是否播放音效）
         .IF uMsg == WM_LBUTTONDOWN
